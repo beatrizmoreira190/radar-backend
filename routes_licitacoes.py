@@ -11,19 +11,21 @@ def buscar_licitacoes(termo: str = Query("livro", description="Palavra-chave da 
     e retorna apenas os campos mais relevantes.
     """
     url = "https://pncp.gov.br/api/search"
-    params = {"termo": termo, "pagina": 1}
+    params = {
+        "termo": termo,
+        "pagina": 1,
+        "tipos_documento": "AVISO_LICITACAO"  # Obrigatório no PNCP
+    }
 
     try:
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
 
-        # Estrutura esperada da API PNCP: data["hits"] contém as licitações
         licitacoes_brutas = data.get("hits", [])
         resultados = []
 
         for item in licitacoes_brutas:
-            # Cada licitação tem um dicionário interno com dados básicos
             fonte = item.get("fonte", "Desconhecida")
             orgao = item.get("orgao", "Não informado")
             objeto = item.get("objeto", "Sem descrição")
@@ -46,9 +48,4 @@ def buscar_licitacoes(termo: str = Query("livro", description="Palavra-chave da 
 
         return {
             "termo_pesquisado": termo,
-            "quantidade_encontrada": len(resultados),
-            "licitacoes": resultados
-        }
-
-    except Exception as e:
-        return {"erro": f"Falha ao buscar licitações: {str(e)}"}
+            "quantidade_encontrada": l_
