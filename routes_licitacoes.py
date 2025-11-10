@@ -50,3 +50,7 @@ def buscar_licitacoes(termo: str = Query("livro", description="Palavra-chave da 
             "termo_pesquisado": termo,
             "quantidade_encontrada": len(resultados),
             "licitacoes": resultados
+        }
+
+    except Exception as e:
+        return {"erro": f"Falha ao buscar licitações: {str(e)}"}
