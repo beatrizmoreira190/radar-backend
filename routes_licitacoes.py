@@ -14,7 +14,7 @@ def buscar_licitacoes(
     Busca licitações com propostas abertas no PNCP (API Consulta v3).
     Filtra por palavra-chave no objeto da licitação.
     """
-    url = "https://pncp.gov.br/api/consulta/v3/contratacoes/proposta"
+    url = "https://pncp.gov.br/api/consulta/v1/contratacoes/proposta"
     params = {
         "dataInicial": data_inicio,
         "dataFinal": data_fim,
