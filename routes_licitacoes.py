@@ -14,7 +14,7 @@ def buscar_licitacoes(termo: str = Query("livro", description="Palavra-chave da 
     params = {
         "termo": termo,
         "pagina": 1,
-        "tipos_documento": "AVISO_LICITACAO"  # Obrigatório no PNCP
+        "tipos_documento": "AVISO_LICITACAO"  # Parâmetro obrigatório no PNCP
     }
 
     try:
@@ -48,4 +48,5 @@ def buscar_licitacoes(termo: str = Query("livro", description="Palavra-chave da 
 
         return {
             "termo_pesquisado": termo,
-            "quantidade_encontrada": l_
+            "quantidade_encontrada": len(resultados),
+            "licitacoes": resultados
