@@ -4,7 +4,7 @@ from datetime import datetime
 
 router = APIRouter()
 
-@router.get("/licitacoes")
+@router.get("/licitacoes/buscar")
 def buscar_licitacoes(termo: str = Query("livro", description="Palavra-chave da licitação")):
     """
     Busca licitações reais na API pública do PNCP com base no termo informado
