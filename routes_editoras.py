@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 router = APIRouter()
 
-# Schemas (validação de entrada)
+# Schemas
 class EditoraSchema(BaseModel):
     nome: str
     email: str
