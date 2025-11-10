@@ -6,18 +6,22 @@ router = APIRouter()
 
 @router.get("/licitacoes/buscar")
 def buscar_licitacoes(
-    termo: str = Query("livro", description="Palavra-chave da licitação"),
-    orgao_id: int = Query(26295, description="ID do órgão no PNCP (26295 = FNDE)"),
+    data_inicial: str = Query("20240101", description="Data inicial no formato AAAAMMDD"),
+    data_final: str = Query("20241231", description="Data final no formato AAAAMMDD"),
+    codigo_modalidade: int = Query(6, description="Código da modalidade (6 = Pregão Eletrônico)"),
     pagina: int = Query(1, ge=1, description="Número da página"),
-    tamanho_pagina: int = Query(50, ge=1, le=100, description="Tamanho da página")
+    tamanho_pagina: int = Query(50, ge=1, le=100, description="Tamanho da página (opcional)"),
+    termo: str = Query("livro", description="Palavra-chave para filtrar no objeto da licitação")
 ):
     """
-    Consulta licitações reais no PNCP (nova API oficial - base https://pncp.gov.br/api/pncp).
-    Prioriza o endpoint /orgaos/{id}/licitacoes, conforme manual de integração v3.
+    Consulta licitações publicadas no PNCP (API oficial /api/consulta/v1/contratacoes/publicacao).
+    Apenas parâmetros obrigatórios e formato de data AAAAMMDD.
     """
-
-    base_url = f"https://pncp.gov.br/api/pncp/v1/orgaos/{orgao_id}/licitacoes"
+    base_url = "https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao"
     params = {
+        "dataInicial": data_inicial,
+        "dataFinal": data_final,
+        "codigoModalidadeContratacao": codigo_modalidade,
         "pagina": pagina,
         "tamanhoPagina": tamanho_pagina
     }
@@ -28,29 +32,29 @@ def buscar_licitacoes(
         data = r.json()
 
         resultados = []
-        for item in data:
-            objeto = item.get("objeto", "")
+        for item in data.get("data", []):
+            objeto = item.get("objeto", "") or ""
             if termo.lower() not in objeto.lower():
                 continue
 
             resultados.append({
-                "orgao": item.get("orgaoNome", "Não informado"),
+                "orgao": item.get("orgaoEntidade", "Não informado"),
                 "objeto": objeto.strip(),
-                "numeroPNCP": item.get("numeroPNCP", ""),
+                "modalidade": item.get("modalidadeNome", "Desconhecida"),
                 "valorEstimado": item.get("valorTotalEstimado", "Não informado"),
-                "dataPublicacao": item.get("dataPublicacao", ""),
-                "status": item.get("situacaoCompraNome", "—")
+                "dataPublicacao": item.get("dataPublicacaoPncp", ""),
+                "link": item.get("linkSistemaOrigem", "")
             })
 
         return {
+            "parametros": params,
             "termo_pesquisado": termo,
-            "orgao_id": orgao_id,
             "quantidade_encontrada": len(resultados),
             "licitacoes": resultados[:100],
             "fonte": base_url
         }
 
     except requests.exceptions.HTTPError as e:
-        return {"erro": f"Erro HTTP PNCP: {e}", "endpoint": base_url}
+        return {"erro": f"Erro HTTP PNCP: {e}", "endpoint": base_url, "parametros": params}
     except Exception as e:
-        return {"erro": f"Falha ao buscar licitações: {str(e)}", "endpoint": base_url}
+        return {"erro": f"Falha ao buscar licitações: {str(e)}", "endpoint": base_url, "parametros": params}
