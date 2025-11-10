@@ -1,67 +1,119 @@
 from fastapi import APIRouter, Query
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 router = APIRouter()
 
+# ---- Funções auxiliares ----
+
+def formatar_data_iso8601(data_str):
+    """Converte AAAA-MM-DD → AAAAMMDD"""
+    return data_str.replace("-", "")
+
+def formatar_data_br(data_iso):
+    """Converte data ISO → DD/MM/AAAA"""
+    try:
+        return datetime.fromisoformat(data_iso).strftime("%d/%m/%Y")
+    except Exception:
+        return data_iso
+
+def termo_existe(item, termo):
+    """Verifica se o termo aparece em qualquer campo relevante"""
+    termo_lower = termo.lower()
+    campos = [
+        item.get("objeto", ""),
+        item.get("descricaoItem", ""),
+        item.get("descricaoLote", ""),
+        item.get("descricaoGrupo", "")
+    ]
+    return any(termo_lower in (c or "").lower() for c in campos)
+
+def normalizar_licitacao(item):
+    """Padroniza os campos de cada licitação"""
+    return {
+        "orgao": item.get("orgaoEntidade", item.get("orgaoNome", "Não informado")),
+        "objeto": item.get("objeto", item.get("descricaoItem", "Sem descrição")).strip(),
+        "modalidade": item.get("modalidade", item.get("modalidadeNome", "Desconhecida")),
+        "data_publicacao": formatar_data_br(item.get("dataPublicacao") or item.get("dataAbertura") or item.get("dataRecebimentoProposta")),
+        "numero_aviso": item.get("numeroAviso", item.get("numeroPNCP", "")),
+        "codigoUASG": item.get("codigoUASG") or item.get("cnpj"),
+        "fonte": item.get("fonte", "PNCP")
+    }
+
+def buscar_endpoint(url, params):
+    """Faz requisição a um endpoint do PNCP"""
+    try:
+        r = requests.get(url, params=params, timeout=25)
+        r.raise_for_status()
+        return r.json().get("data", [])
+    except Exception:
+        return []
+
+# ---- Rota principal ----
+
 @router.get("/licitacoes/buscar")
 def buscar_licitacoes(
-    termo: str = Query("livro", description="Palavra-chave da licitação"),
-    data_inicio: str = Query("2025-01-01", description="Data inicial (AAAA-MM-DD)"),
-    data_fim: str = Query("2025-12-31", description="Data final (AAAA-MM-DD)"),
+    termo: str = Query("livro", description="Palavra-chave a ser buscada"),
+    data_inicio: str = Query("2024-01-01", description="Data inicial (AAAA-MM-DD)"),
+    data_fim: str = Query("2024-12-31", description="Data final (AAAA-MM-DD)"),
     codigo_modalidade: int = Query(5, description="Código da modalidade (5 = Pregão Eletrônico)"),
+    codigo_modo_disputa: int = Query(1, description="Código do modo de disputa (1 = Aberta)"),
     pagina: int = Query(1, ge=1, description="Número da página"),
     tamanho_pagina: int = Query(50, ge=1, le=100, description="Tamanho da página")
 ):
     """
-    Busca licitações publicadas no PNCP (API Consulta v1).
-    Filtra por palavra-chave no campo 'objeto'.
+    Busca licitações reais no PNCP em múltiplos endpoints.
+    Combina resultados de /publicacao, /proposta e /atualizacao.
+    Faz busca por palavra-chave em campos relevantes.
+    Remove duplicados automaticamente.
     """
-    url = "https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao"
 
-    params = {
-        "dataInicial": data_inicio,
-        "dataFinal": data_fim,
-        "codigoModalidadeContratacao": codigo_modalidade,
-        "pagina": pagina,
-        "tamanhoPagina": tamanho_pagina
+    # ---- Configuração geral ----
+    base = "https://pncp.gov.br/api/consulta/v1/contratacoes"
+    data_inicio_fmt = formatar_data_iso8601(data_inicio)
+    data_fim_fmt = formatar_data_iso8601(data_fim)
+
+    endpoints = {
+        "publicacao": f"{base}/publicacao",
+        "proposta": f"{base}/proposta",
+        "atualizacao": f"{base}/atualizacao",
     }
 
-    try:
-        response = requests.get(url, params=params, timeout=20)
-        response.raise_for_status()
-        data = response.json()
+    parametros_comuns = {
+        "dataInicial": data_inicio_fmt,
+        "dataFinal": data_fim_fmt,
+        "codigoModalidadeContratacao": codigo_modalidade,
+        "codigoModoDisputa": codigo_modo_disputa,
+        "pagina": pagina,
+        "tamanhoPagina": tamanho_pagina,
+    }
 
-        resultados = []
-        for item in data.get("data", []):
-            objeto = item.get("objeto", "") or ""
-            if termo.lower() not in objeto.lower():
-                continue
+    # ---- Busca em paralelo nos três endpoints ----
+    resultados_brutos = []
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = {executor.submit(buscar_endpoint, url, parametros_comuns): nome for nome, url in endpoints.items()}
+        for future in as_completed(futures):
+            resultados = future.result()
+            resultados_brutos.extend(resultados)
 
-            orgao = item.get("orgaoEntidade", "Não informado")
-            modalidade = item.get("modalidade", "Desconhecida")
-            data_publicacao = item.get("dataPublicacao", None)
-            if data_publicacao:
-                try:
-                    data_publicacao = datetime.fromisoformat(data_publicacao).strftime("%d/%m/%Y")
-                except Exception:
-                    pass
+    # ---- Filtro por termo ----
+    resultados_filtrados = [normalizar_licitacao(i) for i in resultados_brutos if termo_existe(i, termo)]
 
-            resultados.append({
-                "orgao": orgao,
-                "objeto": objeto.strip(),
-                "modalidade": modalidade,
-                "data_publicacao": data_publicacao
-            })
+    # ---- Remover duplicados (usando número de aviso ou objeto como chave) ----
+    vistos = set()
+    unicos = []
+    for r in resultados_filtrados:
+        chave = (r["numero_aviso"], r["objeto"])
+        if chave not in vistos:
+            vistos.add(chave)
+            unicos.append(r)
 
-        return {
-            "termo_pesquisado": termo,
-            "quantidade_encontrada": len(resultados),
-            "licitacoes": resultados[:20],
-            "fonte": url
-        }
-
-    except requests.exceptions.HTTPError as http_err:
-        return {"erro": f"Erro HTTP ao consultar PNCP: {http_err}"}
-    except Exception as e:
-        return {"erro": f"Falha ao buscar licitações: {str(e)}"}
+    # ---- Retorno final ----
+    return {
+        "termo_pesquisado": termo,
+        "quantidade_encontrada": len(unicos),
+        "licitacoes": unicos[:100],  # limita para evitar resposta gigante
+        "parametros": parametros_comuns,
+        "endpoints_utilizados": list(endpoints.values()),
+    }
