@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from database import engine, Base
 from routes import router as api_router
 from routes_editoras import router as editoras_router
@@ -9,6 +10,20 @@ Base.metadata.create_all(bind=engine)
 
 # Instancia a aplicação FastAPI
 app = FastAPI(title="Radar Inteligente - MVP")
+
+# 🌐 CORS CORRETAMENTE CONFIGURADO
+origins = [
+    "https://radarinteligente.netlify.app",  # frontend em produção
+    "http://localhost:5173",                  # ambiente local (Vite)
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Inclui os módulos de rotas
 app.include_router(api_router)
