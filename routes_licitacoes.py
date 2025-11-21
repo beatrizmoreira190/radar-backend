@@ -38,7 +38,7 @@ def coletar_licitacoes(
     }
 
     try:
-        r = requests.get(url, params=params, timeout=30)
+        r = requests.get(url, params=params, timeout=180)
         r.raise_for_status()
         data = r.json()
 
@@ -88,7 +88,7 @@ def salvar_cache(
         }
 
         try:
-            r = requests.get(url, params=params, timeout=60)
+            r = requests.get(url, params=params, timeout=180)
             r.raise_for_status()
             data = r.json().get("data", [])
 
@@ -364,7 +364,7 @@ def coletar_e_salvar(
     }
 
     try:
-        r = requests.get(url, params=params, timeout=30)
+        r = requests.get(url, params=params, timeout=180)
         r.raise_for_status()
         data = r.json()
     except Exception as e:
