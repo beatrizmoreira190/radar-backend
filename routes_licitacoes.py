@@ -4,71 +4,34 @@ import requests
 
 router = APIRouter()
 
-BASE_URL = "https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao"
-
 @router.get("/licitacoes/coletar")
 def coletar_licitacoes(
-    dataInicial: str = Query(..., description="Data inicial no formato AAAAMMDD"),
-    dataFinal: str = Query(..., description="Data final no formato AAAAMMDD"),
-    codigoModalidadeContratacao: List[int] = Query(
-        ..., description="Lista de códigos de modalidade (ex: 1, 2, 3, 6)"
-    ),
-    codigoModoDisputa: Optional[int] = Query(None),
-    uf: Optional[str] = Query(None),
-    codigoMunicipioIbge: Optional[str] = Query(None),
-    cnpj: Optional[str] = Query(None),
-    codigoUnidadeAdministrativa: Optional[str] = Query(None),
-    idUsuario: Optional[int] = Query(None),
+    data_inicial: str = Query("20240101"),
+    data_final: str = Query("20241231"),
+    codigo_modalidade: List[int] = Query([6]),
     pagina: int = Query(1, ge=1),
-    tamanhoPagina: int = Query(50, ge=1, le=500)
+    tamanho_pagina: int = Query(50, ge=1, le=500)
 ):
-    """
-    Consulta totalmente compatível com o endpoint oficial:
-    
-    GET /v1/contratacoes/publicacao
+    url = "https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao"
 
-    Parâmetros baseados NO SWAGGER DO PNCP:
-    https://pncp.gov.br/api/consulta/swagger-ui/
-    """
+    todas = []
 
-    todas_licitacoes = []
-
-    # A API NÃO ACEITA LISTA DIRETA → fazemos uma requisição por modalidade
-    for modalidade in codigoModalidadeContratacao:
+    # A API NÃO aceita lista → fazemos 1 requisição por modalidade
+    for cod in codigo_modalidade:
 
         params = {
-            "dataInicial": dataInicial,
-            "dataFinal": dataFinal,
-            "codigoModalidadeContratacao": modalidade,
+            "dataInicial": data_inicial,
+            "dataFinal": data_final,
+            "codigoModalidadeContratacao": cod,  # sempre int
             "pagina": pagina,
-            "tamanhoPagina": tamanhoPagina
+            "tamanhoPagina": tamanho_pagina
         }
 
-        # Só enviamos parâmetros opcionais SE forem preenchidos
-        if codigoModoDisputa:
-            params["codigoModoDisputa"] = codigoModoDisputa
-
-        if uf:
-            params["uf"] = uf
-
-        if codigoMunicipioIbge:
-            params["codigoMunicipioIbge"] = codigoMunicipioIbge
-
-        if cnpj:
-            params["cnpj"] = cnpj
-
-        if codigoUnidadeAdministrativa:
-            params["codigoUnidadeAdministrativa"] = codigoUnidadeAdministrativa
-
-        if idUsuario:
-            params["idUsuario"] = idUsuario
-
         try:
-            print(f"Consultando modalidade {modalidade} na página {pagina}...")
-            r = requests.get(BASE_URL, params=params, timeout=30)
+            r = requests.get(url, params=params, timeout=30)
 
-            # Se o PNCP retornar erro → mostramos o texto real do PNCP
             if r.status_code != 200:
+                # Mostra a mensagem REAL da API
                 return {
                     "erro": f"Erro HTTP {r.status_code}",
                     "mensagem_pncp": r.text,
@@ -76,32 +39,28 @@ def coletar_licitacoes(
                 }
 
             dados = r.json().get("data", [])
-            todas_licitacoes.extend(dados)
+            todas.extend(dados)
 
         except Exception as e:
             return {
                 "erro": str(e),
                 "parametros": params,
-                "dados_parciais": todas_licitacoes
+                "dados_parciais": todas
             }
 
-    # Remove duplicados pelo idCompra
+    # remove duplicados
     unicos = {
-        item.get("idCompra"): item for item in todas_licitacoes if item.get("idCompra")
+        item.get("idCompra"): item
+        for item in todas if item.get("idCompra")
     }
 
     return {
         "parametros_enviados": {
-            "dataInicial": dataInicial,
-            "dataFinal": dataFinal,
-            "codigoModalidadeContratacao": codigoModalidadeContratacao,
-            "codigoModoDisputa": codigoModoDisputa,
-            "uf": uf,
-            "codigoMunicipioIbge": codigoMunicipioIbge,
-            "cnpj": cnpj,
-            "codigoUnidadeAdministrativa": codigoUnidadeAdministrativa,
+            "dataInicial": data_inicial,
+            "dataFinal": data_final,
+            "codigo_modalidade": codigo_modalidade,
             "pagina": pagina,
-            "tamanhoPagina": tamanhoPagina
+            "tamanhoPagina": tamanho_pagina
         },
         "quantidade_registros": len(unicos),
         "dados": list(unicos.values())
