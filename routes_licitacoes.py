@@ -337,3 +337,70 @@ def listar_licitacoes_banco(
             for lic in dados
         ]
     }
+# =======================================================
+# 7) NOVO: COLETAR + SALVAR DIRETO NO BANCO
+# =======================================================
+@router.get("/licitacoes/coletar_e_salvar")
+def coletar_e_salvar(
+    data_inicial: str = Query("20250101", description="Data inicial AAAAMMDD"),
+    data_final: str = Query("20251231", description="Data final AAAAMMDD"),
+    codigo_modalidade: int = Query(6, description="Código modalidade PNCP"),
+    pagina: int = Query(1, ge=1, description="Número da página (1)"),
+    tamanho_pagina: int = Query(50, ge=1, le=500, description="Tamanho da página"),
+    db: Session = Depends(get_db)
+):
+    """
+    Coleta UMA página da API do PNCP e SALVA diretamente no banco.
+    Mais leve e ideal para o Render Free.
+    """
+    url = "https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao"
+
+    params = {
+        "dataInicial": data_inicial,
+        "dataFinal": data_final,
+        "codigoModalidadeContratacao": codigo_modalidade,
+        "pagina": pagina,
+        "tamanhoPagina": tamanho_pagina
+    }
+
+    try:
+        r = requests.get(url, params=params, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao coletar PNCP: {e}")
+
+    itens = data.get("data", []) or []
+
+    if not itens:
+        return {
+            "status": "SEM_DADOS",
+            "mensagem": "A API retornou 0 registros.",
+            "parametros": params
+        }
+
+    inseridos = 0
+    atualizados = 0
+
+    for item in itens:
+        criado = salvar_licitacao_no_banco(item, db)
+        if criado:
+            inseridos += 1
+        else:
+            atualizados += 1
+
+    historico = ColetaHistorico(
+        fonte="PNCP_DIRETO",
+        url=r.url,
+        quantidade=len(itens)
+    )
+    db.add(historico)
+    db.commit()
+
+    return {
+        "status": "OK",
+        "coletados": len(itens),
+        "inseridos": inseridos,
+        "atualizados": atualizados,
+        "parametros": params
+    }
