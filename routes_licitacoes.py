@@ -6,8 +6,8 @@ router = APIRouter()
 
 @router.get("/licitacoes/coletar")
 def coletar_licitacoes(
-    data_inicial: str = Query("20240101"),
-    data_final: str = Query("20241231"),
+    data_inicial: str = Query("20250101"),
+    data_final: str = Query("20251231"),
     codigo_modalidade: List[int] = Query([6]),
     pagina: int = Query(1, ge=1),
     tamanho_pagina: int = Query(50, ge=1, le=500)
