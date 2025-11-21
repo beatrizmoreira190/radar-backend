@@ -75,7 +75,7 @@ def salvar_cache(
 
     for pagina in range(1, paginas + 1):
         params = {
-            "dataInicial": "20240101",
+            "dataInicial": "20250101",
             "dataFinal": "20251231",
             "codigoModalidadeContratacao": 6,
             "pagina": pagina,
