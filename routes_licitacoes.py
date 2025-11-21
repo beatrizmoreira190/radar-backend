@@ -1,120 +1,91 @@
 from fastapi import APIRouter, Query
+from typing import Optional, List
+from datetime import date, timedelta
 import requests
 
 router = APIRouter()
 
-# Mapa real das modalidades do PNCP
-MODALIDADES = {
-    1: "Concorrência",
-    2: "Tomada de Preços",
-    3: "Convite",
-    5: "Pregão Presencial",
-    6: "Pregão Eletrônico",
-    7: "Concurso",
-    8: "Leilão",
-    14: "RDC",
-    98: "Outras"
-}
-
-def extrair_modalidade(item):
-    cod = (
-        item.get("modalidadeLicitacao")
-        or item.get("modalidade")
-        or item.get("modalidadeCompra")
-        or 98
-    )
-    return MODALIDADES.get(cod, "Outras")
-
-def extrair_objeto(item):
-    return (
-        item.get("objetoCompra")
-        or item.get("descricao")
-        or item.get("justificativa")
-        or "Descrição não informada"
-    )
-
-def extrair_uf(item):
-    return (
-        item.get("ufMunicipioIbge")
-        or item.get("orgaoEntidade", {}).get("uf")
-        or ""
-    )
-
 @router.get("/licitacoes/coletar")
 def coletar_licitacoes(
-    data_inicial: str = Query("20240101"),
-    data_final: str = Query("20241231"),
-    busca: str = Query("", description="Filtro textual no objeto"),
-    uf: str = Query("", description="Ex: SP, RJ, MG"),
-    modalidade: str = Query("", description="Ex: Pregão Eletrônico"),
-    limite_paginas: int = Query(5, description="Máximo de páginas a coletar no MVP"),
+    data_inicial: Optional[str] = Query(
+        None, description="Data inicial AAAAMMDD (padrão: últimos 30 dias)"
+    ),
+    data_final: Optional[str] = Query(
+        None, description="Data final AAAAMMDD (padrão: hoje)"
+    ),
+    codigo_modalidade: List[int] = Query(
+        [6],
+        description="Modalidades de contratação (ex: 1, 2, 3, 6)."
+    ),
+    pagina_inicial: int = Query(
+        1, ge=1, description="Página inicial"
+    ),
+    limite_paginas: int = Query(
+        5, ge=1, le=10, description="Número máximo de páginas a coletar"
+    ),
+    tamanho_pagina: int = Query(
+        200, ge=1, le=500, description="Tamanho de página"
+    )
 ):
     """
-    MVP REALISTA — Coleta várias páginas do PNCP, normaliza dados,
-    extrai informações reais e aplica filtros opcionais.
+    MVP REALISTA com suporte a múltiplas modalidades.
     """
+    # Default: últimos 30 dias
+    if not data_inicial or not data_final:
+        hoje = date.today()
+        data_final = hoje.strftime("%Y%m%d")
+        data_inicial = (hoje - timedelta(days=30)).strftime("%Y%m%d")
 
     url = "https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao"
+    todas_licitacoes = []
+    pagina = pagina_inicial
 
-    todas = []
-    pagina = 1
+    while pagina < pagina_inicial + limite_paginas:
 
-    while pagina <= limite_paginas:
-
-        params = {
-            "dataInicial": data_inicial,
-            "dataFinal": data_final,
-            "codigoModalidadeContratacao": "",  # sem filtro obrigatório
-            "pagina": pagina,
-            "tamanhoPagina": 200
-        }
-
-        try:
-            r = requests.get(url, params=params, timeout=30)
-            r.raise_for_status()
-            data = r.json()
-
-            registros = data.get("data", [])
-            if not registros:
-                break
-
-            for item in registros:
-
-                obj = extrair_objeto(item)
-                mod = extrair_modalidade(item)
-                uf_item = extrair_uf(item)
-
-                # FILTROS DO MVP
-                if busca and busca.lower() not in obj.lower():
-                    continue
-
-                if modalidade and modalidade.lower() != mod.lower():
-                    continue
-
-                if uf and uf.lower() != uf_item.lower():
-                    continue
-
-                todas.append({
-                    "orgao": item.get("orgaoEntidade", {}).get("razaoSocial"),
-                    "uf": uf_item,
-                    "objeto": obj,
-                    "modalidade": mod,
-                    "dataPublicacao": item.get("dataPublicacaoPncp"),
-                    "processo": item.get("numeroProcesso"),
-                    "idCompra": item.get("idCompra"),
-                    "raw": item,
-                })
-
-            pagina += 1
-
-        except Exception as e:
-            return {
-                "erro": str(e),
-                "pagina_erro": pagina,
-                "dados_parciais": todas
+        # A API do PNCP **não aceita lista direta**
+        # então fazemos 1 requisição por modalidade
+        for modalidade in codigo_modalidade:
+            params = {
+                "dataInicial": data_inicial,
+                "dataFinal": data_final,
+                "codigoModalidadeContratacao": modalidade,  # nunca vazio
+                "pagina": pagina,
+                "tamanhoPagina": tamanho_pagina,
             }
 
+            try:
+                r = requests.get(url, params=params, timeout=30)
+                r.raise_for_status()
+                data = r.json()
+
+                registros = data.get("data", [])
+                if not registros:
+                    continue  # tenta outras modalidades ou encerra
+
+                todas_licitacoes.extend(registros)
+
+            except Exception as e:
+                return {
+                    "erro": str(e),
+                    "parametros": params,
+                    "dados_parciais": todas_licitacoes
+                }
+
+        pagina += 1
+
+    # Tratamento básico de duplicação (caso várias mods tragam o mesmo registro)
+    # idCompra existe praticamente em todas
+    unique = {item.get("idCompra"): item for item in todas_licitacoes if item.get("idCompra")}
+
     return {
-        "total": len(todas),
-        "licitacoes": todas
+        "parametros_enviados": {
+            "dataInicial": data_inicial,
+            "dataFinal": data_final,
+            "codigo_modalidade": codigo_modalidade,
+            "pagina_inicial": pagina_inicial,
+            "limite_paginas": limite_paginas,
+            "tamanhoPagina": tamanho_pagina,
+        },
+        "quantidade_registros": len(unique),
+        "dados": list(unique.values())
     }
