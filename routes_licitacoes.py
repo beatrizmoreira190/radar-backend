@@ -13,7 +13,7 @@ CACHE_FILE = "licitacoes_cache.json"
 # -------------------------------------------
 @router.get("/licitacoes/coletar")
 def coletar_licitacoes(
-    data_inicial: str = Query("20240101", description="Data inicial no formato AAAAMMDD"),
+    data_inicial: str = Query("20250101", description="Data inicial no formato AAAAMMDD"),
     data_final: str = Query("20251231", description="Data final no formato AAAAMMDD"),
     codigo_modalidade: int = Query(6, description="Código da modalidade (6 = Pregão Eletrônico)"),
     pagina: int = Query(1, ge=1, description="Número da página (1 = início)"),
