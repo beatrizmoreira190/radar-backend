@@ -2,6 +2,8 @@ from fastapi import APIRouter, Query, Depends, HTTPException
 import requests
 import json
 import os
+import time
+from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
 from database import get_db
@@ -14,7 +16,7 @@ CACHE_FILE = "licitacoes_cache.json"
 
 
 # =======================================================
-# 1) SEU ENDPOINT ORIGINAL (NÃO FOI ALTERADO)
+# 1) COLETAR 1 PÁGINA BRUTA DO PNCP (SEM SALVAR)
 # =======================================================
 @router.get("/licitacoes/coletar")
 def coletar_licitacoes(
@@ -25,7 +27,7 @@ def coletar_licitacoes(
     tamanho_pagina: int = Query(50, ge=1, le=500, description="Tamanho da página (máx. 500)")
 ):
     """
-    Coleta bruta de 1 página de licitações publicadas no PNCP (como no código original)
+    Coleta bruta de 1 página de licitações publicadas no PNCP (sem salvar no banco).
     """
     url = "https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao"
 
@@ -44,27 +46,20 @@ def coletar_licitacoes(
 
         return {
             "parametros_enviados": params,
-            "quantidade_registros": len(data.get("data", [])),
-            "dados": data.get("data", [])
-        }
-
-    except requests.exceptions.HTTPError as e:
-        return {
-            "erro": f"Erro HTTP PNCP: {e}",
-            "endpoint": url,
-            "parametros": params
+            "quantidade_registros": len(data.get("data", []) or []),
+            "dados": data.get("data", []) or []
         }
 
     except Exception as e:
         return {
-            "erro": f"Falha geral: {str(e)}",
+            "erro": f"Falha ao consultar PNCP: {str(e)}",
             "endpoint": url,
             "parametros": params
         }
 
 
 # =======================================================
-# 2) SEU ENDPOINT ORIGINAL: SALVAR CACHE LOCAL
+# 2) SALVAR CACHE LOCAL EM ARQUIVO JSON
 # =======================================================
 @router.get("/licitacoes/salvar")
 def salvar_cache(
@@ -73,7 +68,7 @@ def salvar_cache(
 ):
     """
     Coleta VÁRIAS páginas do PNCP e salva um arquivo local com TODAS as licitações.
-    Ideal pra ter 500–2000 licitações reais para o MVP.
+    Ideal pra ter 500–2000 licitações reais para testes locais.
     """
     url = "https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao"
     todas = []
@@ -90,7 +85,7 @@ def salvar_cache(
         try:
             r = requests.get(url, params=params, timeout=180)
             r.raise_for_status()
-            data = r.json().get("data", [])
+            data = r.json().get("data", []) or []
 
             if not data:
                 break
@@ -118,12 +113,12 @@ def salvar_cache(
 
 
 # =======================================================
-# 3) SEU ENDPOINT ORIGINAL: LISTAR CACHE
+# 3) LISTAR CACHE LOCAL
 # =======================================================
 @router.get("/licitacoes/listar")
 def listar_cache():
     """
-    Retorna o JSON salvo localmente para o frontend.
+    Retorna o JSON salvo localmente (apenas para testes).
     """
     if not os.path.exists(CACHE_FILE):
         return {"erro": "Nenhum cache encontrado. Execute /licitacoes/salvar primeiro."}
@@ -138,7 +133,7 @@ def listar_cache():
 
 
 # =======================================================
-# 4) SEU ENDPOINT ORIGINAL: FILTRAR CACHE
+# 4) FILTRAR CACHE LOCAL
 # =======================================================
 @router.get("/licitacoes/filtrar")
 def filtrar_cache(
@@ -147,7 +142,7 @@ def filtrar_cache(
     modalidade: str = "",
 ):
     """
-    Filtra o JSON SALVO LOCALMENTE.
+    Filtra o JSON salvo localmente (apenas para testes).
     """
     if not os.path.exists(CACHE_FILE):
         return {"erro": "Nenhum cache encontrado. Execute /licitacoes/salvar primeiro."}
@@ -178,12 +173,12 @@ def filtrar_cache(
 
 
 # =======================================================
-# ⬇⬇⬇ AQUI COMEÇA A PARTE NOVA DO BANCO ⬇⬇⬇
+# FUNÇÃO AUXILIAR: SALVAR UMA LICITAÇÃO NO BANCO
 # =======================================================
-
-def salvar_licitacao_no_banco(item, db: Session):
+def salvar_licitacao_no_banco(item: dict, db: Session) -> bool:
     """
-    Converte o item do PNCP → tabela 'licitacoes'
+    Converte o item do PNCP → tabela 'licitacoes'.
+    Retorna True se criou novo registro, False se atualizou.
     """
 
     id_externo = item.get("idCompra") or item.get("numeroControlePNCP")
@@ -204,13 +199,8 @@ def salvar_licitacao_no_banco(item, db: Session):
             Orgao.uf == uf,
             Orgao.municipio == municipio
         ).first()
-
         if not orgao:
-            orgao = Orgao(
-                nome=orgao_nome,
-                uf=uf,
-                municipio=municipio
-            )
+            orgao = Orgao(nome=orgao_nome, uf=uf, municipio=municipio)
             db.add(orgao)
             db.flush()
 
@@ -231,32 +221,34 @@ def salvar_licitacao_no_banco(item, db: Session):
             data_publicacao=item.get("dataPublicacaoPncp"),
             data_abertura=item.get("dataAberturaProposta"),
             url_externa=item.get("linkSistemaOrigem"),
-            json_raw=item
+            json_raw=item,
         )
         db.add(nova)
         return True
 
-    else:
-        existente.numero = item.get("numeroCompra")
-        existente.objeto = item.get("objetoCompra") or item.get("descricao")
-        existente.modalidade = str(item.get("modalidadeLicitacao"))
-        existente.orgao_id = orgao.id if orgao else None
-        existente.uf = uf
-        existente.municipio = municipio
-        existente.data_publicacao = item.get("dataPublicacaoPncp")
-        existente.data_abertura = item.get("dataAberturaProposta")
-        existente.url_externa = item.get("linkSistemaOrigem")
-        existente.json_raw = item
-        return False
+    # Atualiza existente
+    existente.numero = item.get("numeroCompra")
+    existente.objeto = item.get("objetoCompra") or item.get("descricao")
+    existente.modalidade = str(item.get("modalidadeLicitacao"))
+    existente.orgao_id = orgao.id if orgao else None
+    existente.uf = uf
+    existente.municipio = municipio
+    existente.data_publicacao = item.get("dataPublicacaoPncp")
+    existente.data_abertura = item.get("dataAberturaProposta")
+    existente.url_externa = item.get("linkSistemaOrigem")
+    existente.json_raw = item
+
+    return False
 
 
 # =======================================================
-# 5) NOVO: SALVAR DADOS DO CACHE NO BANCO
+# 5) SALVAR CACHE LOCAL NO BANCO
 # =======================================================
 @router.post("/licitacoes/salvar_no_banco")
 def salvar_cache_no_banco(db: Session = Depends(get_db)):
     """
     Lê o arquivo licitacoes_cache.json e grava todas as licitações no banco.
+    Útil só em ambiente local.
     """
     if not os.path.exists(CACHE_FILE):
         raise HTTPException(400, "Nenhum cache encontrado. Execute /licitacoes/salvar primeiro.")
@@ -280,7 +272,6 @@ def salvar_cache_no_banco(db: Session = Depends(get_db)):
         quantidade=len(dados)
     )
     db.add(historico)
-
     db.commit()
 
     return {
@@ -291,14 +282,14 @@ def salvar_cache_no_banco(db: Session = Depends(get_db)):
 
 
 # =======================================================
-# 6) NOVO: LISTAR LICITAÇÕES DO BANCO
+# 6) LISTAR LICITAÇÕES DO BANCO (AGORA COM LIMITE 5000)
 # =======================================================
 @router.get("/licitacoes/listar_banco")
 def listar_licitacoes_banco(
     busca: str = "",
     uf: str = "",
     modalidade: str = "",
-    limite: int = 200,
+    limite: int = 5000,
     db: Session = Depends(get_db)
 ):
     """
@@ -315,7 +306,8 @@ def listar_licitacoes_banco(
     if modalidade:
         query = query.filter(Licitacao.modalidade.ilike(f"%{modalidade}%"))
 
-    query = query.order_by(Licitacao.id.desc()).limit(limite)
+    # Ordenar por data de publicação mais recente
+    query = query.order_by(Licitacao.data_publicacao.desc(), Licitacao.id.desc()).limit(limite)
     dados = query.all()
 
     return {
@@ -333,14 +325,15 @@ def listar_licitacoes_banco(
                 "data_publicacao": lic.data_publicacao,
                 "data_abertura": lic.data_abertura,
                 "url_externa": lic.url_externa,
-                # ⭐ AQUI: JSON RAW COMPLETO
                 "json_raw": lic.json_raw
             }
             for lic in dados
-        ]
+        ],
     }
+
+
 # =======================================================
-# 7) NOVO: COLETAR + SALVAR DIRETO NO BANCO
+# 7) COLETAR + SALVAR UMA PÁGINA NO BANCO
 # =======================================================
 @router.get("/licitacoes/coletar_e_salvar")
 def coletar_e_salvar(
@@ -353,7 +346,7 @@ def coletar_e_salvar(
 ):
     """
     Coleta UMA página da API do PNCP e SALVA diretamente no banco.
-    Mais leve e ideal para o Render Free.
+    Ideal para chamadas pontuais ou testes.
     """
     url = "https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao"
 
@@ -405,4 +398,156 @@ def coletar_e_salvar(
         "inseridos": inseridos,
         "atualizados": atualizados,
         "parametros": params
+    }
+
+
+# =======================================================
+# 8) COLETAR + SALVAR VÁRIAS PÁGINAS (MULTIPLO)
+# =======================================================
+@router.get("/licitacoes/coletar_e_salvar_multiplo")
+def coletar_e_salvar_multiplo(
+    data_inicial: str = Query(..., description="AAAAMMDD"),
+    data_final: str = Query(..., description="AAAAMMDD"),
+    codigo_modalidade: int = Query(6),
+    paginas: int = Query(20, ge=1, le=50),
+    tamanho_pagina: int = Query(50, ge=1, le=500),
+    db: Session = Depends(get_db)
+):
+    """
+    Coleta várias páginas (ex: 20) de um mesmo período e salva no banco.
+    Usa a MESMA lógica do /coletar_e_salvar, mas automatizando as páginas.
+    """
+    total_inseridos = 0
+    total_atualizados = 0
+    total_paginas_coletadas = 0
+
+    for p in range(1, paginas + 1):
+        url = "https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao"
+        params = {
+            "dataInicial": data_inicial,
+            "dataFinal": data_final,
+            "codigoModalidadeContratacao": codigo_modalidade,
+            "pagina": p,
+            "tamanhoPagina": tamanho_pagina
+        }
+
+        try:
+            r = requests.get(url, params=params, timeout=180)
+            r.raise_for_status()
+            data = r.json()
+            itens = data.get("data", []) or []
+
+            if not itens:
+                break
+
+            for item in itens:
+                criado = salvar_licitacao_no_banco(item, db)
+                if criado:
+                    total_inseridos += 1
+                else:
+                    total_atualizados += 1
+
+            total_paginas_coletadas += 1
+            time.sleep(1)  # pequena pausa entre páginas
+
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Erro ao coletar múltiplas páginas: {e}")
+
+    db.add(ColetaHistorico(
+        fonte="PNCP_MULTIPLO",
+        url="interno /coletar_e_salvar_multiplo",
+        quantidade=total_inseridos
+    ))
+    db.commit()
+
+    return {
+        "status": "OK",
+        "data_inicial": data_inicial,
+        "data_final": data_final,
+        "paginas_processadas": total_paginas_coletadas,
+        "inseridos": total_inseridos,
+        "atualizados": total_atualizados
+    }
+
+
+# =======================================================
+# 9) COLETAR PERÍODO COMPLETO (DIA POR DIA, PÁGINA POR PÁGINA)
+# =======================================================
+@router.get("/licitacoes/coletar_periodo_completo")
+def coletar_periodo_completo(
+    data_inicial: str = Query(..., description="AAAAMMDD"),
+    data_final: str = Query(..., description="AAAAMMDD"),
+    codigo_modalidade: int = Query(6),
+    paginas_por_dia: int = Query(20, ge=1, le=50),
+    tamanho_pagina: int = Query(50, ge=1, le=500),
+    db: Session = Depends(get_db)
+):
+    """
+    Coleta automaticamente um período inteiro (ex: outubro+novembro),
+    dia por dia, página por página, e salva tudo no banco.
+    """
+    try:
+        di = datetime.strptime(data_inicial, "%Y%m%d")
+        df = datetime.strptime(data_final, "%Y%m%d")
+    except ValueError:
+        raise HTTPException(400, "Datas devem estar no formato AAAAMMDD.")
+
+    dia_atual = di
+    total_dias = 0
+    total_paginas = 0
+    total_inseridos = 0
+    total_atualizados = 0
+
+    while dia_atual <= df:
+        data_str = dia_atual.strftime("%Y%m%d")
+
+        for p in range(1, paginas_por_dia + 1):
+            url = "https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao"
+            params = {
+                "dataInicial": data_str,
+                "dataFinal": data_str,
+                "codigoModalidadeContratacao": codigo_modalidade,
+                "pagina": p,
+                "tamanhoPagina": tamanho_pagina
+            }
+
+            try:
+                r = requests.get(url, params=params, timeout=180)
+                r.raise_for_status()
+                data = r.json()
+                itens = data.get("data", []) or []
+
+                if not itens:
+                    break
+
+                for item in itens:
+                    criado = salvar_licitacao_no_banco(item, db)
+                    if criado:
+                        total_inseridos += 1
+                    else:
+                        total_atualizados += 1
+
+                total_paginas += 1
+                time.sleep(1)
+
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Erro no dia {data_str}, página {p}: {e}")
+
+        total_dias += 1
+        dia_atual += timedelta(days=1)
+
+    db.add(ColetaHistorico(
+        fonte="PNCP_PERIODO_COMPLETO",
+        url="interno /coletar_periodo_completo",
+        quantidade=total_inseridos
+    ))
+    db.commit()
+
+    return {
+        "status": "OK",
+        "periodo": f"{data_inicial} → {data_final}",
+        "dias_processados": total_dias,
+        "paginas_processadas": total_paginas,
+        "inseridos": total_inseridos,
+        "atualizados": total_atualizados
     }
