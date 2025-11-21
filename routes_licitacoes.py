@@ -333,6 +333,8 @@ def listar_licitacoes_banco(
                 "data_publicacao": lic.data_publicacao,
                 "data_abertura": lic.data_abertura,
                 "url_externa": lic.url_externa,
+                # ⭐ AQUI: JSON RAW COMPLETO
+                "json_raw": lic.json_raw
             }
             for lic in dados
         ]
