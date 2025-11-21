@@ -28,7 +28,7 @@ def coletar_licitacoes(
         }
 
         try:
-            r = requests.get(url, params=params, timeout=30)
+            r = requests.get(url, params=params, timeout=180)
 
             if r.status_code != 200:
                 # Mostra a mensagem REAL da API
