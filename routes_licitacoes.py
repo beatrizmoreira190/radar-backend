@@ -1,67 +1,51 @@
 from fastapi import APIRouter, Query
-from typing import Optional, List
 import requests
 
 router = APIRouter()
 
 @router.get("/licitacoes/coletar")
 def coletar_licitacoes(
-    data_inicial: str = Query("20250101"),
-    data_final: str = Query("20251231"),
-    codigo_modalidade: List[int] = Query([6]),
-    pagina: int = Query(1, ge=1),
-    tamanho_pagina: int = Query(50, ge=1, le=500)
+    data_inicial: str = Query("20240101", description="Data inicial no formato AAAAMMDD"),
+    data_final: str = Query("20251231", description="Data final no formato AAAAMMDD"),
+    codigo_modalidade: int = Query(6, description="Código da modalidade (6 = Pregão Eletrônico)"),
+    pagina: int = Query(1, ge=1, description="Número da página (1 = início)"),
+    tamanho_pagina: int = Query(50, ge=1, le=500, description="Tamanho da página (máx. 500)")
 ):
+    """
+    Coleta bruta de licitações publicadas no PNCP (sem filtros).
+    Fonte: https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao
+    """
     url = "https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao"
 
-    todas = []
+    params = {
+        "dataInicial": data_inicial,
+        "dataFinal": data_final,
+        "codigoModalidadeContratacao": codigo_modalidade,
+        "pagina": pagina,
+        "tamanhoPagina": tamanho_pagina
+    }
 
-    # A API NÃO aceita lista → fazemos 1 requisição por modalidade
-    for cod in codigo_modalidade:
+    try:
+        r = requests.get(url, params=params, timeout=30)
+        r.raise_for_status()
+        data = r.json()
 
-        params = {
-            "dataInicial": data_inicial,
-            "dataFinal": data_final,
-            "codigoModalidadeContratacao": cod,  # sempre int
-            "pagina": pagina,
-            "tamanhoPagina": tamanho_pagina
+        return {
+            "parametros_enviados": params,
+            "quantidade_registros": len(data.get("data", [])),
+            "dados": data.get("data", [])
         }
 
-        try:
-            r = requests.get(url, params=params, timeout=180)
+    except requests.exceptions.HTTPError as e:
+        return {
+            "erro": f"Erro HTTP PNCP: {e}",
+            "endpoint": url,
+            "parametros": params
+        }
 
-            if r.status_code != 200:
-                # Mostra a mensagem REAL da API
-                return {
-                    "erro": f"Erro HTTP {r.status_code}",
-                    "mensagem_pncp": r.text,
-                    "parametros": params
-                }
-
-            dados = r.json().get("data", [])
-            todas.extend(dados)
-
-        except Exception as e:
-            return {
-                "erro": str(e),
-                "parametros": params,
-                "dados_parciais": todas
-            }
-
-    # remove duplicados
-    unicos = {
-        item.get("idCompra"): item
-        for item in todas if item.get("idCompra")
-    }
-
-    return {
-        "parametros_enviados": {
-            "dataInicial": data_inicial,
-            "dataFinal": data_final,
-            "codigo_modalidade": codigo_modalidade,
-            "pagina": pagina,
-            "tamanhoPagina": tamanho_pagina
-        },
-        "quantidade_registros": len(unicos),
-        "dados": list(unicos.values())
-    }
+    except Exception as e:
+        return {
+            "erro": f"Falha geral: {str(e)}",
+            "endpoint": url,
+            "parametros": params
+        }
