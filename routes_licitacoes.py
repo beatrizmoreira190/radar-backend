@@ -1,91 +1,108 @@
 from fastapi import APIRouter, Query
 from typing import Optional, List
-from datetime import date, timedelta
 import requests
 
 router = APIRouter()
 
+BASE_URL = "https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao"
+
 @router.get("/licitacoes/coletar")
 def coletar_licitacoes(
-    data_inicial: Optional[str] = Query(
-        None, description="Data inicial AAAAMMDD (padrão: últimos 30 dias)"
+    dataInicial: str = Query(..., description="Data inicial no formato AAAAMMDD"),
+    dataFinal: str = Query(..., description="Data final no formato AAAAMMDD"),
+    codigoModalidadeContratacao: List[int] = Query(
+        ..., description="Lista de códigos de modalidade (ex: 1, 2, 3, 6)"
     ),
-    data_final: Optional[str] = Query(
-        None, description="Data final AAAAMMDD (padrão: hoje)"
-    ),
-    codigo_modalidade: List[int] = Query(
-        [6],
-        description="Modalidades de contratação (ex: 1, 2, 3, 6)."
-    ),
-    pagina_inicial: int = Query(
-        1, ge=1, description="Página inicial"
-    ),
-    limite_paginas: int = Query(
-        5, ge=1, le=10, description="Número máximo de páginas a coletar"
-    ),
-    tamanho_pagina: int = Query(
-        200, ge=1, le=500, description="Tamanho de página"
-    )
+    codigoModoDisputa: Optional[int] = Query(None),
+    uf: Optional[str] = Query(None),
+    codigoMunicipioIbge: Optional[str] = Query(None),
+    cnpj: Optional[str] = Query(None),
+    codigoUnidadeAdministrativa: Optional[str] = Query(None),
+    idUsuario: Optional[int] = Query(None),
+    pagina: int = Query(1, ge=1),
+    tamanhoPagina: int = Query(50, ge=1, le=500)
 ):
     """
-    MVP REALISTA com suporte a múltiplas modalidades.
+    Consulta totalmente compatível com o endpoint oficial:
+    
+    GET /v1/contratacoes/publicacao
+
+    Parâmetros baseados NO SWAGGER DO PNCP:
+    https://pncp.gov.br/api/consulta/swagger-ui/
     """
-    # Default: últimos 30 dias
-    if not data_inicial or not data_final:
-        hoje = date.today()
-        data_final = hoje.strftime("%Y%m%d")
-        data_inicial = (hoje - timedelta(days=30)).strftime("%Y%m%d")
 
-    url = "https://pncp.gov.br/api/consulta/v1/contratacoes/publicacao"
     todas_licitacoes = []
-    pagina = pagina_inicial
 
-    while pagina < pagina_inicial + limite_paginas:
+    # A API NÃO ACEITA LISTA DIRETA → fazemos uma requisição por modalidade
+    for modalidade in codigoModalidadeContratacao:
 
-        # A API do PNCP **não aceita lista direta**
-        # então fazemos 1 requisição por modalidade
-        for modalidade in codigo_modalidade:
-            params = {
-                "dataInicial": data_inicial,
-                "dataFinal": data_final,
-                "codigoModalidadeContratacao": modalidade,  # nunca vazio
-                "pagina": pagina,
-                "tamanhoPagina": tamanho_pagina,
-            }
+        params = {
+            "dataInicial": dataInicial,
+            "dataFinal": dataFinal,
+            "codigoModalidadeContratacao": modalidade,
+            "pagina": pagina,
+            "tamanhoPagina": tamanhoPagina
+        }
 
-            try:
-                r = requests.get(url, params=params, timeout=30)
-                r.raise_for_status()
-                data = r.json()
+        # Só enviamos parâmetros opcionais SE forem preenchidos
+        if codigoModoDisputa:
+            params["codigoModoDisputa"] = codigoModoDisputa
 
-                registros = data.get("data", [])
-                if not registros:
-                    continue  # tenta outras modalidades ou encerra
+        if uf:
+            params["uf"] = uf
 
-                todas_licitacoes.extend(registros)
+        if codigoMunicipioIbge:
+            params["codigoMunicipioIbge"] = codigoMunicipioIbge
 
-            except Exception as e:
+        if cnpj:
+            params["cnpj"] = cnpj
+
+        if codigoUnidadeAdministrativa:
+            params["codigoUnidadeAdministrativa"] = codigoUnidadeAdministrativa
+
+        if idUsuario:
+            params["idUsuario"] = idUsuario
+
+        try:
+            print(f"Consultando modalidade {modalidade} na página {pagina}...")
+            r = requests.get(BASE_URL, params=params, timeout=30)
+
+            # Se o PNCP retornar erro → mostramos o texto real do PNCP
+            if r.status_code != 200:
                 return {
-                    "erro": str(e),
-                    "parametros": params,
-                    "dados_parciais": todas_licitacoes
+                    "erro": f"Erro HTTP {r.status_code}",
+                    "mensagem_pncp": r.text,
+                    "parametros": params
                 }
 
-        pagina += 1
+            dados = r.json().get("data", [])
+            todas_licitacoes.extend(dados)
 
-    # Tratamento básico de duplicação (caso várias mods tragam o mesmo registro)
-    # idCompra existe praticamente em todas
-    unique = {item.get("idCompra"): item for item in todas_licitacoes if item.get("idCompra")}
+        except Exception as e:
+            return {
+                "erro": str(e),
+                "parametros": params,
+                "dados_parciais": todas_licitacoes
+            }
+
+    # Remove duplicados pelo idCompra
+    unicos = {
+        item.get("idCompra"): item for item in todas_licitacoes if item.get("idCompra")
+    }
 
     return {
         "parametros_enviados": {
-            "dataInicial": data_inicial,
-            "dataFinal": data_final,
-            "codigo_modalidade": codigo_modalidade,
-            "pagina_inicial": pagina_inicial,
-            "limite_paginas": limite_paginas,
-            "tamanhoPagina": tamanho_pagina,
+            "dataInicial": dataInicial,
+            "dataFinal": dataFinal,
+            "codigoModalidadeContratacao": codigoModalidadeContratacao,
+            "codigoModoDisputa": codigoModoDisputa,
+            "uf": uf,
+            "codigoMunicipioIbge": codigoMunicipioIbge,
+            "cnpj": cnpj,
+            "codigoUnidadeAdministrativa": codigoUnidadeAdministrativa,
+            "pagina": pagina,
+            "tamanhoPagina": tamanhoPagina
         },
-        "quantidade_registros": len(unique),
-        "dados": list(unique.values())
+        "quantidade_registros": len(unicos),
+        "dados": list(unicos.values())
     }
