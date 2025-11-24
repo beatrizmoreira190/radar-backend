@@ -284,34 +284,49 @@ def salvar_cache_no_banco(db: Session = Depends(get_db)):
 # =======================================================
 # 6) LISTAR LICITAÇÕES DO BANCO (AGORA COM LIMITE 5000)
 # =======================================================
+
 @router.get("/licitacoes/listar_banco")
 def listar_licitacoes_banco(
+    id: int | None = None,
     busca: str = "",
     uf: str = "",
     modalidade: str = "",
     limite: int = 5000,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     Lista licitações já salvas no banco (versão persistente e filtrável).
+    Se 'id' for informado, retorna apenas aquela licitação.
     """
-    query = db.query(Licitacao)
+    base_query = db.query(Licitacao)
 
-    if busca:
-        query = query.filter(Licitacao.objeto.ilike(f"%{busca}%"))
+    # Se for busca por ID específico, ignora os demais filtros
+    if id is not None:
+        lic = base_query.filter(Licitacao.id == id).first()
+        if not lic:
+            raise HTTPException(status_code=404, detail="Licitação não encontrada")
+        dados = [lic]
+        total = 1
+    else:
+        query = base_query
 
-    if uf:
-        query = query.filter(Licitacao.uf == uf.upper())
+        if busca:
+            query = query.filter(Licitacao.objeto.ilike(f"%{busca}%"))
 
-    if modalidade:
-        query = query.filter(Licitacao.modalidade.ilike(f"%{modalidade}%"))
+        if uf:
+            query = query.filter(Licitacao.uf == uf.upper())
 
-    # Ordenar por data de publicação mais recente
-    query = query.order_by(Licitacao.data_publicacao.desc(), Licitacao.id.desc()).limit(limite)
-    dados = query.all()
+        if modalidade:
+            query = query.filter(Licitacao.modalidade.ilike(f"%{modalidade}%"))
+
+        query = query.order_by(
+            Licitacao.data_publicacao.desc(), Licitacao.id.desc()
+        ).limit(limite)
+        dados = query.all()
+        total = len(dados)
 
     return {
-        "total": len(dados),
+        "total": total,
         "dados": [
             {
                 "id": lic.id,
@@ -325,7 +340,7 @@ def listar_licitacoes_banco(
                 "data_publicacao": lic.data_publicacao,
                 "data_abertura": lic.data_abertura,
                 "url_externa": lic.url_externa,
-                "json_raw": lic.json_raw
+                "json_raw": lic.json_raw,
             }
             for lic in dados
         ],
