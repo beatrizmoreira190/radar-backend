@@ -26,7 +26,6 @@ app.add_middleware(
 Base.metadata.create_all(bind=engine)
 
 # Rotas
-app.include_router(api_router)
 app.include_router(editoras_router)
 app.include_router(licitacoes_router)
 
