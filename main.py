@@ -2,7 +2,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import engine, Base
-from routes import router as api_router
 from routes_editoras import router as editoras_router
 from routes_licitacoes import router as licitacoes_router
 
