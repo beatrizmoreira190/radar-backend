@@ -566,3 +566,103 @@ def coletar_periodo_completo(
         "inseridos": total_inseridos,
         "atualizados": total_atualizados
     }
+# =======================================================
+# 10) INTERESSES (FAVORITOS DE LICITAÇÕES)
+# =======================================================
+
+from models import LicitacaoInteresse  # já existe no seu models
+
+# ADD FAVORITO
+@router.post("/interesses/adicionar")
+def adicionar_interesse(
+    licitacao_id: int,
+    db: Session = Depends(get_db)
+):
+    EDITORA_FIXA = 1  # ← até ter login real
+
+    # já existe?
+    existente = db.query(LicitacaoInteresse).filter(
+        LicitacaoInteresse.editora_id == EDITORA_FIXA,
+        LicitacaoInteresse.licitacao_id == licitacao_id
+    ).first()
+
+    if existente:
+        return {"status": "ja_existe", "mensagem": "Licitação já está salva."}
+
+    novo = LicitacaoInteresse(
+        editora_id=EDITORA_FIXA,
+        licitacao_id=licitacao_id,
+        status="interessado"
+    )
+    db.add(novo)
+    db.commit()
+
+    return {"status": "ok", "mensagem": "Licitação adicionada aos interesses."}
+
+
+# REMOVER FAVORITO
+@router.delete("/interesses/remover/{licitacao_id}")
+def remover_interesse(
+    licitacao_id: int,
+    db: Session = Depends(get_db)
+):
+    EDITORA_FIXA = 1
+
+    interesse = db.query(LicitacaoInteresse).filter(
+        LicitacaoInteresse.editora_id == EDITORA_FIXA,
+        LicitacaoInteresse.licitacao_id == licitacao_id
+    ).first()
+
+    if not interesse:
+        raise HTTPException(404, "Interesse não encontrado")
+
+    db.delete(interesse)
+    db.commit()
+
+    return {"status": "ok", "mensagem": "Licitação removida dos interesses."}
+
+
+# VERIFICAR SE ESTÁ NOS FAVORITOS
+@router.get("/interesses/verificar")
+def verificar_interesse(
+    licitacao_id: int,
+    db: Session = Depends(get_db)
+):
+    EDITORA_FIXA = 1
+
+    interesse = db.query(LicitacaoInteresse).filter(
+        LicitacaoInteresse.editora_id == EDITORA_FIXA,
+        LicitacaoInteresse.licitacao_id == licitacao_id
+    ).first()
+
+    return {"salvo": bool(interesse)}
+
+
+# LISTAR TODOS OS FAVORITOS
+@router.get("/interesses/listar")
+def listar_interesses(
+    db: Session = Depends(get_db)
+):
+    EDITORA_FIXA = 1
+
+    interesses = (
+        db.query(LicitacaoInteresse)
+        .filter(LicitacaoInteresse.editora_id == EDITORA_FIXA)
+        .all()
+    )
+
+    lista = []
+    for inter in interesses:
+        lic = inter.licitacao
+        if lic:
+            lista.append({
+                "id": lic.id,
+                "orgao": lic.orgao.nome if lic.orgao else None,
+                "objeto": lic.objeto,
+                "municipio": lic.municipio,
+                "uf": lic.uf,
+                "data_publicacao": lic.data_publicacao,
+                "status": inter.status,
+            })
+
+    return {"total": len(lista), "dados": lista}
