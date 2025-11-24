@@ -666,3 +666,162 @@ def listar_interesses(
             })
 
     return {"total": len(lista), "dados": lista}
+
+
+# =======================================================
+# 11) ACOMPANHAMENTO DE LICITAÇÕES.
+# =======================================================
+
+@router.post("/acompanhamento/iniciar")
+def iniciar_acompanhamento(
+    licitacao_id: int,
+    db: Session = Depends(get_db)
+):
+    EDITORA_FIXA = 1
+
+    # verificar se já existe
+    existente = db.query(LicitacaoInteresse).filter(
+        LicitacaoInteresse.editora_id == EDITORA_FIXA,
+        LicitacaoInteresse.licitacao_id == licitacao_id
+    ).first()
+
+    if existente:
+        return {
+            "status": "ja_existe",
+            "mensagem": "Acompanhamento já iniciado.",
+            "acompanhamento_id": existente.id
+        }
+
+    novo = LicitacaoInteresse(
+        editora_id=EDITORA_FIXA,
+        licitacao_id=licitacao_id,
+        status="interessado"
+    )
+    db.add(novo)
+    db.commit()
+    db.refresh(novo)
+
+    return {
+        "status": "ok",
+        "mensagem": "Acompanhamento iniciado!",
+        "acompanhamento_id": novo.id
+    }
+
+@router.patch("/acompanhamento/status")
+def atualizar_status(
+    licitacao_id: int,
+    status: str,
+    db: Session = Depends(get_db)
+):
+    EDITORA_FIXA = 1
+
+    acomp = db.query(LicitacaoInteresse).filter(
+        LicitacaoInteresse.editora_id == EDITORA_FIXA,
+        LicitacaoInteresse.licitacao_id == licitacao_id
+    ).first()
+
+    if not acomp:
+        raise HTTPException(404, "Acompanhamento não encontrado.")
+
+    acomp.status = status
+    db.commit()
+
+    return {"status": "ok", "mensagem": "Status atualizado."}
+
+
+@router.post("/acompanhamento/tarefas/adicionar")
+def adicionar_tarefa(
+    licitacao_id: int,
+    titulo: str,
+    descricao: str = "",
+    db: Session = Depends(get_db)
+):
+    EDITORA_FIXA = 1
+
+    acomp = db.query(LicitacaoInteresse).filter(
+        LicitacaoInteresse.editora_id == EDITORA_FIXA,
+        LicitacaoInteresse.licitacao_id == licitacao_id
+    ).first()
+
+    if not acomp:
+        raise HTTPException(404, "Acompanhamento não encontrado.")
+
+    tarefa = AcompanhamentoTarefa(
+        acompanhamento_id=acomp.id,
+        titulo=titulo,
+        descricao=descricao
+    )
+
+    db.add(tarefa)
+    db.commit()
+    db.refresh(tarefa)
+
+    return {"status": "ok", "tarefa": {
+        "id": tarefa.id,
+        "titulo": tarefa.titulo,
+        "descricao": tarefa.descricao,
+        "concluido": tarefa.concluido
+    }}
+
+
+@router.patch("/acompanhamento/tarefas/concluir/{tarefa_id}")
+def concluir_tarefa(
+    tarefa_id: int,
+    db: Session = Depends(get_db)
+):
+    tarefa = db.query(AcompanhamentoTarefa).filter(
+        AcompanhamentoTarefa.id == tarefa_id
+    ).first()
+
+    if not tarefa:
+        raise HTTPException(404, "Tarefa não encontrada.")
+
+    tarefa.concluido = True
+    db.commit()
+
+    return {"status": "ok", "mensagem": "Tarefa concluída."}
+
+
+@router.delete("/acompanhamento/tarefas/remover/{tarefa_id}")
+def remover_tarefa(
+    tarefa_id: int,
+    db: Session = Depends(get_db)
+):
+    tarefa = db.query(AcompanhamentoTarefa).filter(
+        AcompanhamentoTarefa.id == tarefa_id
+    ).first()
+
+    if not tarefa:
+        raise HTTPException(404, "Tarefa não encontrada.")
+
+    db.delete(tarefa)
+    db.commit()
+
+    return {"status": "ok", "mensagem": "Tarefa removida."}
+
+
+@router.get("/acompanhamento/tarefas")
+def listar_tarefas(
+    licitacao_id: int,
+    db: Session = Depends(get_db)
+):
+    EDITORA_FIXA = 1
+
+    acomp = db.query(LicitacaoInteresse).filter(
+        LicitacaoInteresse.editora_id == EDITORA_FIXA,
+        LicitacaoInteresse.licitacao_id == licitacao_id
+    ).first()
+
+    if not acomp:
+        raise HTTPException(404, "Acompanhamento não encontrado.")
+
+    lista = []
+    for t in acomp.tarefas:
+        lista.append({
+            "id": t.id,
+            "titulo": t.titulo,
+            "descricao": t.descricao,
+            "concluido": t.concluido
+        })
+
+    return {"total": len(lista), "tarefas": lista}
