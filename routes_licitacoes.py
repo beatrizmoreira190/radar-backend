@@ -668,7 +668,7 @@ def listar_interesses(
     return {"total": len(lista), "dados": lista}
 
 # =======================================================
-# 11) ACOMPANHAMENTO DE LICITAÇÕES
+# 11) ACOMPANHAMENTO DE LICITAÇÕES.
 # =======================================================
 
 @router.post("/acompanhamento/iniciar")
