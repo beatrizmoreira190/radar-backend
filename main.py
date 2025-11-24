@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import engine, Base
+from routes import router as api_router
 from routes_editoras import router as editoras_router
 from routes_licitacoes import router as licitacoes_router
 
@@ -26,6 +27,7 @@ app.add_middleware(
 Base.metadata.create_all(bind=engine)
 
 # Rotas
+app.include_router(api_router)
 app.include_router(editoras_router)
 app.include_router(licitacoes_router)
 
