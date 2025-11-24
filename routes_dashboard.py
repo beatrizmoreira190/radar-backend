@@ -61,19 +61,29 @@ def dashboard_resumo(db: Session = Depends(get_db)):
 # ============================
 @router.get("/estatisticas_uf")
 def estatisticas_uf(db: Session = Depends(get_db)):
-    rows = db.query(Licitacao.uf).all()
+    licitacoes = db.query(Licitacao).all()
     contagem = {}
 
-    for (uf,) in rows:
-        if not uf:
+    for lic in licitacoes:
+        raw = lic.json_raw or {}
+
+        # Pega UF da mesma forma que o frontend faz
+        uf = (
+            raw.get("unidadeOrgao", {}).get("ufSigla")
+            or raw.get("orgaoEntidade", {}).get("uf")
+            or lic.uf
+        )
+
+        if not uf or uf == "—":
             continue
+
         contagem[uf] = contagem.get(uf, 0) + 1
 
-    # retorno formatado
     lista = [{"uf": uf, "total": total} for uf, total in contagem.items()]
     lista.sort(key=lambda x: x["total"], reverse=True)
 
     return {"total_estados": len(lista), "dados": lista}
+
 
 
 # ============================
