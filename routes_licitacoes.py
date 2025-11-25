@@ -466,8 +466,11 @@ def coletar_e_salvar_multiplo(
             time.sleep(1)  # pequena pausa entre páginas
 
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Erro ao coletar múltiplas páginas: {e}")
+            # 🚨 Em vez de parar tudo, registra falha e segue
+            print(f"⚠ Erro ao coletar página {p}: {e}")
+            continue  # pula para a próxima página
 
+    # Registrar histórico apenas do que deu certo
     db.add(ColetaHistorico(
         fonte="PNCP_MULTIPLO",
         url="interno /coletar_e_salvar_multiplo",
@@ -480,8 +483,10 @@ def coletar_e_salvar_multiplo(
         "data_inicial": data_inicial,
         "data_final": data_final,
         "paginas_processadas": total_paginas_coletadas,
+        "paginas_totais_configuradas": paginas,
         "inseridos": total_inseridos,
-        "atualizados": total_atualizados
+        "atualizados": total_atualizados,
+        "mensagem": f"Coleta finalizada com {total_paginas_coletadas}/{paginas} páginas processadas com sucesso."
     }
 
 
