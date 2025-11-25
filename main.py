@@ -6,7 +6,7 @@ from routes import router as api_router
 from routes_editoras import router as editoras_router
 from routes_licitacoes import router as licitacoes_router
 from routes_dashboard import router as dashboard_router
-
+from routes_notificacoes import router as notificacoes_router
 
 # Instancia a aplicação FastAPI
 app = FastAPI(title="Radar Inteligente - MVP")
@@ -33,6 +33,7 @@ app.include_router(api_router)
 app.include_router(editoras_router)
 app.include_router(licitacoes_router)
 app.include_router(dashboard_router)
+app.include_router(notificacoes_router)
 
 @app.get("/")
 def root():
