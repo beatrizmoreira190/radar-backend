@@ -15,23 +15,47 @@ router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 @router.get("/resumo")
 def dashboard_resumo(db: Session = Depends(get_db)):
 
-    total_licitacoes = db.query(Licitacao).count()
+    licitacoes = db.query(Licitacao).all()
 
-    # últimas 24h
-    ontem = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d")
-    total_24h = db.query(Licitacao).filter(
-        Licitacao.criado_em >= ontem
-    ).count()
+    agora = datetime.utcnow()
+    dia_24h = agora - timedelta(days=1)
+    dia_7d = agora - timedelta(days=7)
 
-    # últimos 7 dias
-    semana = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%d")
-    total_7dias = db.query(Licitacao).filter(
-        Licitacao.criado_em >= semana
-    ).count()
+    total_24h = 0
+    total_7dias = 0
 
-    acompanhamentos = db.query(LicitacaoInteresse).count()
+    # ===== Função auxiliar para pegar a data real de publicação =====
+    def parse_data_publicacao(lic):
+        raw = lic.json_raw or {}
 
-    # contagem por status
+        dt = (
+            raw.get("dataPublicacaoPncp")
+            or lic.data_publicacao
+        )
+
+        if not dt:
+            return None
+
+        # Normaliza ISO
+        try:
+            return datetime.fromisoformat(dt.replace("Z", ""))
+        except:
+            return None
+
+    # ===== Conta corretamente =====
+    for lic in licitacoes:
+        dt = parse_data_publicacao(lic)
+        if not dt:
+            continue
+
+        if dt >= dia_24h:
+            total_24h += 1
+        if dt >= dia_7d:
+            total_7dias += 1
+
+    total_licitacoes = len(licitacoes)
+
+    # ===== Status dos acompanhamentos (já estava ok) =====
     status_agregado = {
         "interessado": 0,
         "estudando_editais": 0,
@@ -51,7 +75,7 @@ def dashboard_resumo(db: Session = Depends(get_db)):
         "total_licitacoes": total_licitacoes,
         "novas_24h": total_24h,
         "novas_7dias": total_7dias,
-        "acompanhamentos": acompanhamentos,
+        "acompanhamentos": db.query(LicitacaoInteresse).count(),
         "status_acompanhamentos": status_agregado
     }
 
