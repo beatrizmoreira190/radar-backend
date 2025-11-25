@@ -79,7 +79,6 @@ def dashboard_resumo(db: Session = Depends(get_db)):
         "status_acompanhamentos": status_agregado
     }
 
-
 # ============================
 # 2) LICITAÇÕES POR UF
 # ============================
