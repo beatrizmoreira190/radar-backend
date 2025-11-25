@@ -178,23 +178,41 @@ def proximos_prazos(db: Session = Depends(get_db)):
 # ============================
 @router.get("/oportunidades_recentes")
 def oportunidades_recentes(db: Session = Depends(get_db)):
-    lic = (
-        db.query(Licitacao)
-        .order_by(Licitacao.criado_em.desc())
-        .limit(10)
-        .all()
-    )
+
+    def get_data_pub(lic):
+        raw = lic.json_raw or {}
+        dt = raw.get("dataPublicacaoPncp") or lic.data_publicacao
+        if not dt:
+            return None
+        try:
+            return datetime.fromisoformat(dt.replace("Z", ""))
+        except:
+            return None
+
+    licitacoes = db.query(Licitacao).all()
+
+    # Cria lista [(licitação, data_publicação)]
+    lista = []
+    for lic in licitacoes:
+        dt = get_data_pub(lic)
+        if dt:
+            lista.append((lic, dt))
+
+    # Ordena pela data REAL de publicação
+    lista.sort(key=lambda x: x[1], reverse=True)
+
+    # Retorna apenas os 10 mais recentes
+    lista = lista[:10]
 
     return {
-        "total": len(lic),
+        "total": len(lista),
         "dados": [
             {
-                "id": l.id,
-                "objeto": l.objeto,
-                "orgao": l.orgao.nome if l.orgao else None,
-                "data_publicacao": l.data_publicacao,
-                "criado_em": l.criado_em
+                "id": lic.id,
+                "objeto": lic.objeto,
+                "orgao": lic.orgao.nome if lic.orgao else None,
+                "data_publicacao": dt.isoformat(),
             }
-            for l in lic
+            for lic, dt in lista
         ]
     }
