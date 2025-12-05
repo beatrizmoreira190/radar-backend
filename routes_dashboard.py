@@ -1,6 +1,7 @@
 # routes_dashboard.py
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
+from sqlalchemy import func, desc
 from datetime import datetime, timedelta
 
 from database import get_db
@@ -14,48 +15,32 @@ router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 # ============================
 @router.get("/resumo")
 def dashboard_resumo(db: Session = Depends(get_db)):
-
-    licitacoes = db.query(Licitacao).all()
-
     agora = datetime.utcnow()
     dia_24h = agora - timedelta(days=1)
     dia_7d = agora - timedelta(days=7)
 
-    total_24h = 0
-    total_7dias = 0
+    # Em vez de puxar TODAS as licitações e contar em Python,
+    # usamos diretamente a coluna data_publicacao no banco.
+    # (fica MUITO mais leve; se o json_raw tiver datas um pouco diferentes,
+    # a diferença é marginal para fins de dashboard).
+    total_licitacoes = db.query(func.count(Licitacao.id)).scalar()
 
-    # ===== Função auxiliar para pegar a data real de publicação =====
-    def parse_data_publicacao(lic):
-        raw = lic.json_raw or {}
+    novas_24h = (
+        db.query(func.count(Licitacao.id))
+        .filter(Licitacao.data_publicacao != None)
+        .filter(Licitacao.data_publicacao >= dia_24h)
+        .scalar()
+    )
 
-        dt = (
-            raw.get("dataPublicacaoPncp")
-            or lic.data_publicacao
-        )
+    novas_7dias = (
+        db.query(func.count(Licitacao.id))
+        .filter(Licitacao.data_publicacao != None)
+        .filter(Licitacao.data_publicacao >= dia_7d)
+        .scalar()
+    )
 
-        if not dt:
-            return None
-
-        # Normaliza ISO
-        try:
-            return datetime.fromisoformat(dt.replace("Z", ""))
-        except:
-            return None
-
-    # ===== Conta corretamente =====
-    for lic in licitacoes:
-        dt = parse_data_publicacao(lic)
-        if not dt:
-            continue
-
-        if dt >= dia_24h:
-            total_24h += 1
-        if dt >= dia_7d:
-            total_7dias += 1
-
-    total_licitacoes = len(licitacoes)
-
-    # ===== Status dos acompanhamentos (já estava ok) =====
+    # ===== Status dos acompanhamentos =====
+    # Aqui também dá pra evitar trazer tudo e agrupar direto no banco:
     status_agregado = {
         "interessado": 0,
         "estudando_editais": 0,
@@ -65,48 +50,52 @@ def dashboard_resumo(db: Session = Depends(get_db)):
         "encerrado": 0,
     }
 
-    status_rows = db.query(LicitacaoInteresse.status).all()
+    status_rows = (
+        db.query(LicitacaoInteresse.status, func.count(LicitacaoInteresse.id))
+        .group_by(LicitacaoInteresse.status)
+        .all()
+    )
 
-    for (status,) in status_rows:
+    for status, qtd in status_rows:
         if status in status_agregado:
-            status_agregado[status] += 1
+            status_agregado[status] = qtd
+
+    acompanhamentos_total = db.query(func.count(LicitacaoInteresse.id)).scalar()
 
     return {
         "total_licitacoes": total_licitacoes,
-        "novas_24h": total_24h,
-        "novas_7dias": total_7dias,
-        "acompanhamentos": db.query(LicitacaoInteresse).count(),
-        "status_acompanhamentos": status_agregado
+        "novas_24h": novas_24h,
+        "novas_7dias": novas_7dias,
+        "acompanhamentos": acompanhamentos_total,
+        "status_acompanhamentos": status_agregado,
     }
+
 
 # ============================
 # 2) LICITAÇÕES POR UF
 # ============================
 @router.get("/estatisticas_uf")
 def estatisticas_uf(db: Session = Depends(get_db)):
-    licitacoes = db.query(Licitacao).all()
-    contagem = {}
+    # Versão leve: agrupa direto pela coluna uf no banco.
+    # Obs.: isso NÃO usa o json_raw pra corrigir UF, mas para fins de estatística
+    # de dashboard é mais seguro do que dar .all() em tudo.
+    rows = (
+        db.query(Licitacao.uf, func.count(Licitacao.id))
+        .filter(Licitacao.uf != None)
+        .filter(Licitacao.uf != "—")
+        .group_by(Licitacao.uf)
+        .all()
+    )
 
-    for lic in licitacoes:
-        raw = lic.json_raw or {}
+    lista = [
+        {"uf": uf, "total": total}
+        for uf, total in rows
+        if uf
+    ]
 
-        # Pega UF da mesma forma que o frontend faz
-        uf = (
-            raw.get("unidadeOrgao", {}).get("ufSigla")
-            or raw.get("orgaoEntidade", {}).get("uf")
-            or lic.uf
-        )
-
-        if not uf or uf == "—":
-            continue
-
-        contagem[uf] = contagem.get(uf, 0) + 1
-
-    lista = [{"uf": uf, "total": total} for uf, total in contagem.items()]
     lista.sort(key=lambda x: x["total"], reverse=True)
 
     return {"total_estados": len(lista), "dados": lista}
-
 
 
 # ============================
@@ -114,12 +103,14 @@ def estatisticas_uf(db: Session = Depends(get_db)):
 # ============================
 @router.get("/status_acompanhamentos")
 def status_acompanhamentos(db: Session = Depends(get_db)):
-    
-    status_rows = db.query(LicitacaoInteresse.status).all()
-    contagem = {}
+    # Mesmo que o anterior, mas devolvendo direto o dicionário.
+    rows = (
+        db.query(LicitacaoInteresse.status, func.count(LicitacaoInteresse.id))
+        .group_by(LicitacaoInteresse.status)
+        .all()
+    )
 
-    for (status,) in status_rows:
-        contagem[status] = contagem.get(status, 0) + 1
+    contagem = {status: qtd for status, qtd in rows}
 
     return contagem
 
@@ -129,48 +120,72 @@ def status_acompanhamentos(db: Session = Depends(get_db)):
 # ============================
 @router.get("/proximos_prazos")
 def proximos_prazos(db: Session = Depends(get_db)):
-
-    licitacoes = db.query(Licitacao).all()
     hoje = datetime.utcnow()
+
+    # Pra evitar dar .all() numa tabela enorme, a ideia é:
+    # - pegar um conjunto razoável de licitações mais recentes (por data_publicacao),
+    #   por exemplo as últimas 1000
+    # - em cima desse subconjunto, aplicar a lógica de data_abertura / json_raw
+    # Isso é mais que suficiente pra achar os próximos 10 prazos pro dashboard.
+
+    candidatos = (
+        db.query(Licitacao)
+        .order_by(desc(Licitacao.data_publicacao))
+        .limit(1000)
+        .all()
+    )
 
     proximas = []
 
-    for lic in licitacoes:
-        # tenta data de abertura
+    for lic in candidatos:
+        # tenta data de abertura (ISO string)
         if lic.data_abertura:
             try:
                 dt = datetime.fromisoformat(lic.data_abertura.replace("Z", ""))
                 if dt > hoje:
-                    proximas.append({
-                        "id": lic.id,
-                        "objeto": lic.objeto,
-                        "data": dt,
-                        "tipo": "abertura"
-                    })
-            except:
+                    proximas.append(
+                        {
+                            "id": lic.id,
+                            "objeto": lic.objeto,
+                            "data": dt,
+                            "tipo": "abertura",
+                        }
+                    )
+            except Exception:
                 pass
 
-        # tenta encerramento
+        # tenta encerramento no json_raw
         raw = lic.json_raw or {}
-        if raw.get("dataEncerramentoProposta"):
+        enc = raw.get("dataEncerramentoProposta")
+        if enc:
             try:
-                dt2 = datetime.fromisoformat(
-                    raw["dataEncerramentoProposta"].replace("Z", "")
-                )
+                dt2 = datetime.fromisoformat(enc.replace("Z", ""))
                 if dt2 > hoje:
-                    proximas.append({
-                        "id": lic.id,
-                        "objeto": lic.objeto,
-                        "data": dt2,
-                        "tipo": "encerramento"
-                    })
-            except:
+                    proximas.append(
+                        {
+                            "id": lic.id,
+                            "objeto": lic.objeto,
+                            "data": dt2,
+                            "tipo": "encerramento",
+                        }
+                    )
+            except Exception:
                 pass
 
-    # ordena por data mais próxima
+    # ordena por data mais próxima e corta os 10 primeiros
     proximas.sort(key=lambda x: x["data"])
 
-    return {"proximos_prazos": proximas[:10]}
+    return {
+        "proximos_prazos": [
+            {
+                "id": item["id"],
+                "objeto": item["objeto"],
+                "tipo": item["tipo"],
+                "data": item["data"].isoformat(),
+            }
+            for item in proximas[:10]
+        ]
+    }
 
 
 # ============================
@@ -178,6 +193,9 @@ def proximos_prazos(db: Session = Depends(get_db)):
 # ============================
 @router.get("/oportunidades_recentes")
 def oportunidades_recentes(db: Session = Depends(get_db)):
+    # Mesma ideia: não vamos varrer a tabela inteira.
+    # Pegamos as últimas N licitações e, dentro delas, calculamos a "data real"
+    # usando json_raw + data_publicacao.
 
     def get_data_pub(lic):
         raw = lic.json_raw or {}
@@ -185,23 +203,31 @@ def oportunidades_recentes(db: Session = Depends(get_db)):
         if not dt:
             return None
         try:
-            return datetime.fromisoformat(dt.replace("Z", ""))
-        except:
+            # dt pode ser string ou datetime; tratamos os dois casos
+            if isinstance(dt, str):
+                return datetime.fromisoformat(dt.replace("Z", ""))
+            return dt
+        except Exception:
             return None
 
-    licitacoes = db.query(Licitacao).all()
+    # Subconjunto: últimas 1000 por data_publicacao
+    candidatos = (
+        db.query(Licitacao)
+        .order_by(desc(Licitacao.data_publicacao))
+        .limit(1000)
+        .all()
+    )
 
-    # Cria lista [(licitação, data_publicação)]
     lista = []
-    for lic in licitacoes:
+    for lic in candidatos:
         dt = get_data_pub(lic)
         if dt:
             lista.append((lic, dt))
 
-    # Ordena pela data REAL de publicação
+    # Ordena pela data real de publicação
     lista.sort(key=lambda x: x[1], reverse=True)
 
-    # Retorna apenas os 10 mais recentes
+    # Top 10
     lista = lista[:10]
 
     return {
@@ -214,5 +240,5 @@ def oportunidades_recentes(db: Session = Depends(get_db)):
                 "data_publicacao": dt.isoformat(),
             }
             for lic, dt in lista
-        ]
+        ],
     }
