@@ -19,28 +19,52 @@ def dashboard_resumo(db: Session = Depends(get_db)):
     dia_24h = agora - timedelta(days=1)
     dia_7d = agora - timedelta(days=7)
 
-    # Em vez de puxar TODAS as licitações e contar em Python,
-    # usamos diretamente a coluna data_publicacao no banco.
-    # (fica MUITO mais leve; se o json_raw tiver datas um pouco diferentes,
-    # a diferença é marginal para fins de dashboard).
+    # Total geral: conta direto no banco (leve)
     total_licitacoes = db.query(func.count(Licitacao.id)).scalar()
 
-    novas_24h = (
-        db.query(func.count(Licitacao.id))
-        .filter(Licitacao.data_publicacao != None)
-        .filter(Licitacao.data_publicacao >= dia_24h)
-        .scalar()
+    # Para não depender do tipo da coluna data_publicacao (string x datetime),
+    # vamos fazer igual você fazia antes, mas NUM SUBCONJUNTO do banco, não em tudo.
+
+    # Pegamos, por exemplo, as 10.000 licitações mais recentes.
+    # Se quiser deixar mais baixo (5.000), também funciona.
+    limite_amostra = 10000
+
+    candidatos = (
+        db.query(Licitacao)
+        .order_by(desc(Licitacao.id))   # ou desc(Licitacao.data_publicacao) se tiver índice
+        .limit(limite_amostra)
+        .all()
     )
 
-    novas_7dias = (
-        db.query(func.count(Licitacao.id))
-        .filter(Licitacao.data_publicacao != None)
-        .filter(Licitacao.data_publicacao >= dia_7d)
-        .scalar()
-    )
+    def parse_data_publicacao(lic):
+        raw = lic.json_raw or {}
 
-    # ===== Status dos acompanhamentos =====
-    # Aqui também dá pra evitar trazer tudo e agrupar direto no banco:
+        dt = raw.get("dataPublicacaoPncp") or lic.data_publicacao
+        if not dt:
+            return None
+
+        # dt pode ser string ou datetime
+        try:
+            if isinstance(dt, str):
+                return datetime.fromisoformat(dt.replace("Z", ""))
+            return dt
+        except Exception:
+            return None
+
+    total_24h = 0
+    total_7dias = 0
+
+    for lic in candidatos:
+        dt = parse_data_publicacao(lic)
+        if not dt:
+            continue
+
+        if dt >= dia_24h:
+            total_24h += 1
+        if dt >= dia_7d:
+            total_7dias += 1
+
+    # ===== Status dos acompanhamentos (agora por GROUP BY) =====
     status_agregado = {
         "interessado": 0,
         "estudando_editais": 0,
@@ -64,8 +88,8 @@ def dashboard_resumo(db: Session = Depends(get_db)):
 
     return {
         "total_licitacoes": total_licitacoes,
-        "novas_24h": novas_24h,
-        "novas_7dias": novas_7dias,
+        "novas_24h": total_24h,
+        "novas_7dias": total_7dias,
         "acompanhamentos": acompanhamentos_total,
         "status_acompanhamentos": status_agregado,
     }
